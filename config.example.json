@@ -48,6 +48,10 @@
 
 	"api": {
 		"enabled": true,
+		"poolCharts":"0 */1 * * * *",
+		"poolChartsNum":48,
+		"minerCharts":"0 */10 * * * *",
+		"minerChartsNum":48,
 		"purgeOnly": false,
 		"purgeInterval": "10m",
 		"listen": "0.0.0.0:8080",
