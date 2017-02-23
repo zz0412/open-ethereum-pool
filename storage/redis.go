@@ -30,9 +30,11 @@ type PoolCharts struct {
 	PoolHash   int64 `json:"poolHash"`
 }
 type MinerCharts struct {
-	Timestamp  int64    `json:"timestamp"`
-	TimeFormat string    `json:"timeFormat"`
-	MinerHash  int64 `json:"minerHash"`
+	Timestamp      int64    `json:"timestamp"`
+	TimeFormat     string    `json:"timeFormat"`
+	MinerHash      int64 `json:"minerHash"`
+	MinerLargeHash int64 `json:"minerLargeHash"`
+	WorkerOnline string `json:"workerOnline"`
 }
 type BlockData struct {
 	Height         int64    `json:"height"`
@@ -133,8 +135,8 @@ func (r *RedisClient) WritePoolCharts(time1 int64, time2 string, poolHash string
 	cmd := r.client.ZAdd(r.formatKey("charts", "pool"), redis.Z{Score: float64(time1), Member: s})
 	return cmd.Err()
 }
-func (r *RedisClient) WriteMinerCharts(time1 int64, time2, k string, hash, workerOnline int64) (error) {
-	s := join(time1, time2, hash)
+func (r *RedisClient) WriteMinerCharts(time1 int64, time2, k string, hash, largeHash, workerOnline int64) (error) {
+	s := join(time1, time2, hash, largeHash, workerOnline)
 	cmd := r.client.ZAdd(r.formatKey("charts", "miner", k), redis.Z{Score: float64(time1), Member: s})
 	return cmd.Err()
 }
@@ -174,12 +176,17 @@ func convertPoolChartsResults(raw *redis.ZSliceCmd) []*PoolCharts {
 func convertMinerChartsResults(raw *redis.ZSliceCmd) []*MinerCharts {
 	var result []*MinerCharts
 	for _, v := range raw.Val() {
-		// "Timestamp:TimeFormat:Hash"
+		// "Timestamp:TimeFormat:Hash:largeHash:workerOnline"
 		mc := MinerCharts{}
 		mc.Timestamp = int64(v.Score)
 		str := v.Member.(string)
-		mc.TimeFormat = str[strings.Index(str, ":") + 1:strings.LastIndex(str, ":")]
-		mc.MinerHash, _ = strconv.ParseInt(str[strings.LastIndex(str, ":") + 1:], 10, 64)
+		mc.TimeFormat = str[1]
+		mc.MinerHash, _ = strconv.ParseInt(str[2], 10, 64)
+		// old data not have this
+		if len(str) > 2 {
+			mc.MinerLargeHash, _ = strconv.ParseInt(str[3], 10, 64)
+			mc.WorkerOnline = str[4]
+		}
 		result = append(result, &mc)
 	}
 	return result
@@ -264,7 +271,7 @@ func (r *RedisClient) GetNodeStates() ([]map[string]interface{}, error) {
 
 func (r *RedisClient) checkPoWExist(height uint64, params []string) (bool, error) {
 	// Sweep PoW backlog for previous blocks, we have 3 templates back in RAM
-	r.client.ZRemRangeByScore(r.formatKey("pow"), "-inf", fmt.Sprint("(", height-8))
+	r.client.ZRemRangeByScore(r.formatKey("pow"), "-inf", fmt.Sprint("(", height - 8))
 	val, err := r.client.ZAdd(r.formatKey("pow"), redis.Z{Score: float64(height), Member: strings.Join(params, ":")}).Result()
 	return val == 0, err
 }
@@ -346,7 +353,7 @@ func (r *RedisClient) formatKey(args ...interface{}) string {
 }
 
 func (r *RedisClient) formatRound(height int64, nonce string) string {
-	return r.formatKey("shares", "round"+strconv.FormatInt(height, 10), nonce)
+	return r.formatKey("shares", "round" + strconv.FormatInt(height, 10), nonce)
 }
 
 func join(args ...interface{}) string {
@@ -678,7 +685,7 @@ func (r *RedisClient) GetMinerStats(login string, maxPayments int64) (map[string
 
 	cmds, err := tx.Exec(func() error {
 		tx.HGetAllMap(r.formatKey("miners", login))
-		tx.ZRevRangeWithScores(r.formatKey("payments", login), 0, maxPayments-1)
+		tx.ZRevRangeWithScores(r.formatKey("payments", login), 0, maxPayments - 1)
 		tx.ZCard(r.formatKey("payments", login))
 		tx.HGet(r.formatKey("shares", "roundCurrent"), login)
 		return nil
@@ -715,7 +722,7 @@ func convertStringMap(m map[string]string) map[string]interface{} {
 // WARNING: Must run it periodically to flush out of window hashrate entries
 func (r *RedisClient) FlushStaleStats(window, largeWindow time.Duration) (int64, error) {
 	now := util.MakeTimestamp() / 1000
-	max := fmt.Sprint("(", now-int64(window/time.Second))
+	max := fmt.Sprint("(", now - int64(window / time.Second))
 	total, err := r.client.ZRemRangeByScore(r.formatKey("hashrate"), "-inf", max).Result()
 	if err != nil {
 		return total, err
@@ -723,7 +730,7 @@ func (r *RedisClient) FlushStaleStats(window, largeWindow time.Duration) (int64,
 
 	var c int64
 	miners := make(map[string]struct{})
-	max = fmt.Sprint("(", now-int64(largeWindow/time.Second))
+	max = fmt.Sprint("(", now - int64(largeWindow / time.Second))
 
 	for {
 		var keys []string
@@ -760,17 +767,17 @@ func (r *RedisClient) CollectStats(smallWindow time.Duration, maxBlocks, maxPaym
 	now := util.MakeTimestamp() / 1000
 
 	cmds, err := tx.Exec(func() error {
-		tx.ZRemRangeByScore(r.formatKey("hashrate"), "-inf", fmt.Sprint("(", now-window))
+		tx.ZRemRangeByScore(r.formatKey("hashrate"), "-inf", fmt.Sprint("(", now - window))
 		tx.ZRangeWithScores(r.formatKey("hashrate"), 0, -1)
 		tx.HGetAllMap(r.formatKey("stats"))
 		tx.ZRevRangeWithScores(r.formatKey("blocks", "candidates"), 0, -1)
 		tx.ZRevRangeWithScores(r.formatKey("blocks", "immature"), 0, -1)
-		tx.ZRevRangeWithScores(r.formatKey("blocks", "matured"), 0, maxBlocks-1)
+		tx.ZRevRangeWithScores(r.formatKey("blocks", "matured"), 0, maxBlocks - 1)
 		tx.ZCard(r.formatKey("blocks", "candidates"))
 		tx.ZCard(r.formatKey("blocks", "immature"))
 		tx.ZCard(r.formatKey("blocks", "matured"))
 		tx.ZCard(r.formatKey("payments", "all"))
-		tx.ZRevRangeWithScores(r.formatKey("payments", "all"), 0, maxPayments-1)
+		tx.ZRevRangeWithScores(r.formatKey("payments", "all"), 0, maxPayments - 1)
 		return nil
 	})
 
@@ -814,7 +821,7 @@ func (r *RedisClient) CollectWorkersStats(sWindow, lWindow time.Duration, login 
 	now := util.MakeTimestamp() / 1000
 
 	cmds, err := tx.Exec(func() error {
-		tx.ZRemRangeByScore(r.formatKey("hashrate", login), "-inf", fmt.Sprint("(", now-largeWindow))
+		tx.ZRemRangeByScore(r.formatKey("hashrate", login), "-inf", fmt.Sprint("(", now - largeWindow))
 		tx.ZRangeWithScores(r.formatKey("hashrate", login), 0, -1)
 		return nil
 	})
@@ -847,7 +854,7 @@ func (r *RedisClient) CollectWorkersStats(sWindow, lWindow time.Duration, login 
 		}
 		worker.TotalHR = worker.TotalHR / boundary
 
-		if worker.LastBeat < (now - smallWindow/2) {
+		if worker.LastBeat < (now - smallWindow / 2) {
 			worker.Offline = true
 			offline++
 		} else {
@@ -873,11 +880,11 @@ func (r *RedisClient) CollectLuckStats(windows []int) (map[string]interface{}, e
 	tx := r.client.Multi()
 	defer tx.Close()
 
-	max := int64(windows[len(windows)-1])
+	max := int64(windows[len(windows) - 1])
 
 	cmds, err := tx.Exec(func() error {
 		tx.ZRevRangeWithScores(r.formatKey("blocks", "immature"), 0, -1)
-		tx.ZRevRangeWithScores(r.formatKey("blocks", "matured"), 0, max-1)
+		tx.ZRevRangeWithScores(r.formatKey("blocks", "matured"), 0, max - 1)
 		return nil
 	})
 	if err != nil {
@@ -984,7 +991,7 @@ func convertWorkersStats(window int64, raw *redis.ZSliceCmd) map[string]Worker {
 		worker.TotalHR += share
 
 		// Add for small window if matches
-		if score >= now-window {
+		if score >= now - window {
 			worker.HR += share
 		}
 
@@ -1033,7 +1040,7 @@ func convertMinersStats(window int64, raw *redis.ZSliceCmd) (int64, map[string]M
 		}
 		miner.HR = miner.HR / boundary
 
-		if miner.LastBeat < (now - window/2) {
+		if miner.LastBeat < (now - window / 2) {
 			miner.Offline = true
 		}
 		totalHashrate += miner.HR

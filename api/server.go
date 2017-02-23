@@ -120,7 +120,7 @@ func (s *ApiServer) Start() {
 			}
 			for _, login := range miners {
 				miner, _ := s.backend.CollectWorkersStats(s.hashrateWindow, s.hashrateLargeWindow, login)
-				s.collectMinerCharts(login, miner["currentHashrate"].(int64), miner["workersOnline"].(int64))
+				s.collectMinerCharts(login, miner["currentHashrate"].(int64), miner["hashrate"].(int64), miner["workersOnline"].(int64))
 			}
 		})
 
@@ -154,7 +154,7 @@ func (s *ApiServer) collectPoolCharts() {
 /**
 后台统计每个旷工算力数据
  */
-func (s *ApiServer) collectMinerCharts(login string, hash int64, workerOnline int64) {
+func (s *ApiServer) collectMinerCharts(login string, hash ,largeHash int64, workerOnline int64) {
 	// 抽取时间戳，时间，矿池当前算力
 	ts := util.MakeTimestamp() / 1000
 	now := time.Now()
@@ -162,8 +162,8 @@ func (s *ApiServer) collectMinerCharts(login string, hash int64, workerOnline in
 	hour, min, _ := now.Clock()
 	t2 := fmt.Sprintf("%d-%02d-%02d %02d_%02d", year, month, day, hour, min)
 
-	log.Println("Miner " + login + " Hash is", ts, t2, hash)
-	err := s.backend.WriteMinerCharts(ts, t2, login, hash, workerOnline)
+	log.Println("Miner " + login + " Hash is", ts, t2, hash,largeHash)
+	err := s.backend.WriteMinerCharts(ts, t2, login, hash,largeHash, workerOnline)
 	if err != nil {
 		log.Printf("Failed to fetch miner %v charts from backend: %v", login, err)
 	}
